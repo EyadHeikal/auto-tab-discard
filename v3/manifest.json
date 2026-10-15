@@ -37,13 +37,23 @@
   },
   "content_scripts": [{
     "match_about_blank": true,
+    "match_origin_as_fallback": true,
     "matches": ["<all_urls>"],
     "js": [
       "/data/inject/watch.js"
     ],
     "run_at": "document_start",
     "all_frames": true
+  }, {
+    "match_about_blank": true,
+    "match_origin_as_fallback": true,
+    "matches": ["<all_urls>"],
+    "js": ["/data/inject/calls.js"],
+    "world": "MAIN",
+    "run_at": "document_start",
+    "all_frames": true
   }],
+  "minimum_chrome_version": "111",
   "action": {
     "default_popup": "/data/popup/index.html"
   },

@@ -11,7 +11,7 @@ const observe = () => {
         active: false,
         discarded: false,
         url: prefs['force.hostnames'].map(h => `*://${h}/*`)
-      }).then(tbs => tbs.forEach(discard));
+      }).then(tbs => tbs.forEach(tab => discard(tab, {automatic: true})));
     }
     else {
       log('Please disable forced plug-in', 'there is not hostname in the list');

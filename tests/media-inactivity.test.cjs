@@ -7,6 +7,7 @@ const vm = require('node:vm');
 const read = file => fs.readFileSync(path.join(__dirname, '../v3', file), 'utf8');
 const watch = read('data/inject/watch.js');
 const meta = read('data/inject/meta.js');
+const calls = read('worker/core/calls.mjs').replace(/^import .*;$/gm, '').replace(/^export .*;$/gm, '');
 const mode = read('worker/modes/number.mjs').replace(/^import .*;$/gm, '')
   .replace(/^export .*;$/gm, '') + '\nthis.number = number;';
 const epoch = 1700000000000;
@@ -17,6 +18,7 @@ function fixture(preferences = {}) {
   const tabs = [];
   const pages = new Map();
   const discarded = [];
+  const requests = [];
   const prefs = {period: 1800, number: 0, audio: true, paused: false, 'split-view': false, ...preferences};
   const noop = () => {};
   const event = {addListener: noop};
@@ -26,11 +28,42 @@ function fixture(preferences = {}) {
       Object.assign(this, {paused: true, currentTime: 0, muted: false, volume: 1}, options);
     }
   }
+  class Stream {
+    constructor(tracks = []) {
+      this.tracks = tracks;
+    }
+    getTracks() {
+      return this.tracks;
+    }
+    get active() {
+      return this.tracks.some(track => track.readyState === 'live');
+    }
+  }
   const addPage = (tab, options = {}) => {
     const listeners = new Map();
+    const documentListeners = new Map();
     const players = [];
-    const sandbox = {Date: clock, console, HTMLMediaElement: Media,
-      document: {querySelectorAll: () => players, readyState: 'complete'},
+    let callState = {active: false, stopped: 0};
+    class CustomEvent {
+      constructor(type, options = {}) {
+        Object.assign(this, {type}, options);
+      }
+    }
+    const document = {querySelectorAll: () => players, readyState: 'complete',
+      addEventListener: (name, fn) => {
+        if (!documentListeners.has(name)) documentListeners.set(name, new Set());
+        documentListeners.get(name).add(fn);
+      },
+      removeEventListener: (name, fn) => documentListeners.get(name)?.delete(fn),
+      dispatchEvent: event => {
+        for (const fn of [...(documentListeners.get(event.type) || [])]) fn(event);
+        return true;
+      }};
+    document.addEventListener('auto-tab-discard:call-state-request', () => {
+      document.dispatchEvent(new CustomEvent('auto-tab-discard:call-state', {detail: JSON.stringify(callState)}));
+    });
+    const sandbox = {Date: clock, console, HTMLMediaElement: Media, MediaStream: Stream,
+      CustomEvent, Event: CustomEvent, document,
       performance: {timing: {domLoading: epoch}, memory: options.memory && {totalJSHeapSize: options.memory}},
       addEventListener: (name, fn, capture) => {
         if (!listeners.has(name)) listeners.set(name, []);
@@ -42,6 +75,10 @@ function fixture(preferences = {}) {
     ctx.lastVisit = options.visit ?? epoch;
     const page = {ctx, listeners, players,
       player: options => {const p = new Media(options); players.push(p); return p;},
+      call: state => {callState = state;},
+      callEvent: detail => document.dispatchEvent(new CustomEvent('auto-tab-discard:call-state', {detail})),
+      documentListenerCount: () => [...documentListeners.values()].reduce((sum, entries) => sum + entries.size, 0),
+      reinstall: () => vm.runInContext(watch, ctx),
       emit: (name, target, trusted = true) => {
         for (const {fn, capture} of listeners.get(name) || []) {
           // Native media events do not bubble: require capture listeners.
@@ -62,15 +99,16 @@ function fixture(preferences = {}) {
   const background = vm.createContext({console, Date: clock,
     storage: async defaults => ({...defaults, ...prefs}), log: noop,
     match: () => false, icon: {disabled: noop, reset: noop},
-    discard: tab => discarded.push(tab.id),
+    discard: (tab, options) => {discarded.push(tab.id); requests.push({tab, options});},
     query: async filter => tabs.filter(tab => Object.entries(filter).every(([key, value]) =>
       key === 'url' || tab[key] === value)),
     starters: [], interrupts: {'before-action': async () => {}},
     chrome: {alarms: {create: noop, clear: noop, onAlarm: event}, idle: {onStateChanged: event},
       storage: {onChanged: event}, scripting: {executeScript: async ({target}) =>
         pages.get(target.tabId).map(page => ({result: page.metadata()}))}}});
+  vm.runInContext(calls, background);
   vm.runInContext(mode, background);
-  return {addTab, addPage, discarded, prefs, now: () => now,
+  return {addTab, addPage, discarded, requests, prefs, stream: tracks => new Stream(tracks), now: () => now,
     advance: duration => {now += duration;},
     check: ops => background.number.check(undefined, ops), manual: () => background.number.check(undefined, background.number.IGNORE)};
 }
@@ -205,4 +243,148 @@ test('existing unsaved-form protection and submit reset are preserved', async ()
   for (const {fn} of page.listeners.get('submit')) fn();
   assert.equal(page.metadata().forms, false);
   await f.check(); assert.deepEqual(f.discarded, [1]);
+});
+
+test('quiet Firefox microphone, camera, and screen sharing prevent automatic discard', async () => {
+  for (const sharingState of [{microphone: true}, {camera: true}, {screen: 'Screen'}]) {
+    const f = fixture(); f.addTab({sharingState});
+    await f.check(); assert.deepEqual(f.discarded, [], JSON.stringify(sharingState));
+  }
+});
+test('inactive Firefox sharing state permits automatic discard', async () => {
+  for (const sharingState of [undefined, {}, {microphone: false, camera: false, screen: undefined}]) {
+    const f = fixture(); f.addTab({sharingState});
+    await f.check(); assert.deepEqual(f.discarded, [1]);
+  }
+});
+test('stopping native capture releases Firefox tab protection', async () => {
+  const f = fixture(); const {tab} = f.addTab({sharingState: {microphone: true}});
+  await f.check(); assert.deepEqual(f.discarded, []);
+  tab.sharingState = {microphone: false, camera: false};
+  await f.check(); assert.deepEqual(f.discarded, [1]);
+});
+test('live audio and video stream tracks protect quiet paused media', async () => {
+  for (const kind of ['audio', 'video']) {
+    const f = fixture(); const {page} = f.addTab();
+    page.player({srcObject: f.stream([{kind, readyState: 'live', enabled: true, muted: false}])});
+    await f.check(); assert.deepEqual(f.discarded, [], kind);
+  }
+});
+test('muted elements and disabled or muted live tracks remain protected', async () => {
+  for (const options of [
+    {element: {muted: true}},
+    {element: {volume: 0}},
+    {track: {enabled: false}},
+    {track: {muted: true}}
+  ]) {
+    const f = fixture(); const {page} = f.addTab();
+    page.player({...options.element, srcObject: f.stream([
+      {kind: 'audio', readyState: 'live', enabled: true, muted: false, ...options.track}
+    ])});
+    await f.check(); assert.deepEqual(f.discarded, [], JSON.stringify(options));
+  }
+});
+test('live streams in embedded frames protect the entire tab', async () => {
+  const f = fixture(); const {tab} = f.addTab(); const frame = f.addPage(tab, {frame: true});
+  frame.player({srcObject: f.stream([{kind: 'audio', readyState: 'live'}])});
+  f.addPage(tab, {frame: true});
+  await f.check(); assert.deepEqual(f.discarded, []);
+});
+test('ended streams, empty streams, and ordinary paused media allow discard', async () => {
+  for (const tracks of [null, [], [{kind: 'audio', readyState: 'ended'}]]) {
+    const f = fixture(); const {page} = f.addTab();
+    page.player({srcObject: tracks === null ? null : f.stream(tracks)});
+    await f.check(); assert.deepEqual(f.discarded, [1]);
+  }
+});
+test('ending or detaching a live stream releases tab protection', async () => {
+  for (const end of ['track', 'detach']) {
+    const f = fixture(); const {page} = f.addTab();
+    const track = {kind: 'audio', readyState: 'live'};
+    const player = page.player({srcObject: f.stream([track])});
+    await f.check(); assert.deepEqual(f.discarded, []);
+    if (end === 'track') track.readyState = 'ended';
+    else player.srcObject = null;
+    await f.check(); assert.deepEqual(f.discarded, [1]);
+  }
+});
+test('disabling audio protection permits discarding native capture, live streams, and peers', async () => {
+  for (const capture of ['native', 'stream', 'peer']) {
+    const f = fixture({audio: false});
+    const {page} = f.addTab(capture === 'native' ? {sharingState: {microphone: true}} : {});
+    if (capture === 'stream') page.player({srcObject: f.stream([{kind: 'audio', readyState: 'live'}])});
+    if (capture === 'peer') page.call({active: true, stopped: 0});
+    await f.check(); assert.deepEqual(f.discarded, [1], capture);
+  }
+});
+test('automatic memory threshold cannot discard active capture, live streams, or peers', async () => {
+  for (const capture of ['native', 'stream', 'peer']) {
+    const f = fixture({'memory-enabled': true, 'memory-value': 1});
+    const {page} = f.addTab({memory: 2 * 1024 * 1024,
+      ...(capture === 'native' ? {sharingState: {microphone: true}} : {})});
+    if (capture === 'stream') page.player({srcObject: f.stream([{kind: 'audio', readyState: 'live'}])});
+    if (capture === 'peer') page.call({active: true, stopped: 0});
+    await f.check(); assert.deepEqual(f.discarded, [], capture);
+  }
+});
+test('zero-period scans still protect native capture, live streams, and peers', async () => {
+  for (const capture of ['native', 'stream', 'peer']) {
+    const f = fixture({period: 0});
+    const {page} = f.addTab(capture === 'native' ? {sharingState: {microphone: true}} : {});
+    if (capture === 'stream') page.player({srcObject: f.stream([{kind: 'audio', readyState: 'live'}])});
+    if (capture === 'peer') page.call({active: true, stopped: 0});
+    await f.check(); assert.deepEqual(f.discarded, [], capture);
+  }
+});
+test('one ended track cannot release a stream with another live track', async () => {
+  const f = fixture(); const {page} = f.addTab();
+  page.player({srcObject: f.stream([
+    {kind: 'audio', readyState: 'ended'}, {kind: 'video', readyState: 'live', enabled: false}
+  ])});
+  await f.check(); assert.deepEqual(f.discarded, []);
+});
+test('call-state requests protect quiet peer calls without attached media', async () => {
+  const f = fixture(); const {page} = f.addTab(); page.call({active: true, stopped: 0});
+  await f.check(); assert.deepEqual(f.discarded, []);
+});
+test('call-state protection aggregates every frame', async () => {
+  const f = fixture(); const {tab} = f.addTab(); const frame = f.addPage(tab, {frame: true});
+  frame.call({active: true, stopped: 0}); f.addPage(tab, {frame: true});
+  await f.check(); assert.deepEqual(f.discarded, []);
+});
+test('ending a peer call starts one complete new inactivity interval', async () => {
+  const f = fixture(); const {page} = f.addTab(); page.call({active: true, stopped: 0});
+  await f.check(); assert.deepEqual(f.discarded, []);
+  page.call({active: false, stopped: f.now()});
+  await f.check(); assert.deepEqual(f.discarded, []);
+  f.advance(30 * minute - 1); await f.check(); assert.deepEqual(f.discarded, []);
+  f.advance(1); await f.check(); assert.deepEqual(f.discarded, [1]);
+});
+test('invalid bridge payloads cannot protect a tab or restart inactivity', async () => {
+  for (const state of [null, {}, {active: 'true', stopped: 0}, {active: false, stopped: -1},
+    {active: false, stopped: '1700002400000'}, {active: false, stopped: epoch + 99 * minute}]) {
+    const f = fixture(); const {page} = f.addTab(); page.call(state);
+    page.callEvent('{broken-json'); page.callEvent({active: true, stopped: f.now()});
+    await f.check(); assert.deepEqual(f.discarded, [1], JSON.stringify(state));
+  }
+});
+test('watch reinjection preserves form state and does not duplicate listeners', async () => {
+  const f = fixture(); const {page} = f.addTab();
+  const input = {tagName: 'INPUT', isConnected: true, value: 'unsaved text'};
+  for (const {fn} of page.listeners.get('keydown')) fn({keyCode: 65, target: input});
+  const count = [...page.listeners.values()].reduce((sum, entries) => sum + entries.length, 0);
+  const documentCount = page.documentListenerCount();
+  page.reinstall();
+  assert.equal([...page.listeners.values()].reduce((sum, entries) => sum + entries.length, 0), count);
+  assert.equal(page.documentListenerCount(), documentCount);
+  assert.equal(page.metadata().forms, true);
+  await f.check(); assert.deepEqual(f.discarded, []);
+});
+test('normal and memory-based candidate scans preserve automatic discard context', async () => {
+  for (const memory of [undefined, 2 * 1024 * 1024]) {
+    const f = fixture({'memory-enabled': Boolean(memory), 'memory-value': 1});
+    f.addTab({memory}); await f.check();
+    assert.deepEqual(f.discarded, [1]);
+    assert.equal(f.requests[0].options.automatic, true);
+  }
 });

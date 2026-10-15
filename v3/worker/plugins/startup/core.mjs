@@ -25,7 +25,7 @@ const observe = () => {
       // discard loaded tabs
       log('startup plug-in', 'number of tabs that can be discarded on startup', tbs.length);
 
-      const opts = number.IGNORE;
+      const opts = {...number.IGNORE};
       delete opts.number;
       // discard all loaded tabs immediately
       number.check(tbs.filter(t => t.status !== 'unloaded'), opts, 'startup-plugin/1');

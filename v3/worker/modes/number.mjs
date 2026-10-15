@@ -1,6 +1,7 @@
 import {storage} from '../core/prefs.mjs';
 import {log, query, match, icon} from '../core/utils.mjs';
 import {discard} from '../core/discard.mjs';
+import {isCallActive} from '../core/calls.mjs';
 import {starters} from '../core/startup.mjs';
 import {interrupts} from '../plugins/loader.mjs';
 
@@ -189,6 +190,7 @@ number.check = async (filterTabsFrom, ops = {}, reason) => {
   // https://github.com/rNeomy/auto-tab-discard/issues/464
   const preExceptions = exceptionCount;
   let memDiscards = 0;
+  const jobs = [];
   for (const tb of tbs) {
     try {
       const ms = tb.status === 'unloaded' ? [] : await chrome.scripting.executeScript({
@@ -214,12 +216,19 @@ number.check = async (filterTabsFrom, ops = {}, reason) => {
       meta.audible = ms.some(o => o && o.audible);
       meta.paused = ms.some(o => o && o.paused);
 
+      if (prefs.audio && isCallActive(tb, ms)) {
+        log('discarding aborted', 'active call or capture', tb.id, tb.url);
+        icon.disabled(tb, 'tab has an active call or capture');
+        exceptionCount += 1;
+        continue;
+      }
+
       if (prefs.audio && prefs.period > 0) {
         // Media may stop while the asynchronous metadata scan is in progress.
         const observed = Date.now();
         const stopped = ms.reduce((time, o) => {
-          const value = o && o.mediaStop;
-          return Number.isFinite(value) && value >= 0 && value <= observed ? Math.max(time, value) : time;
+          return [o && o.mediaStop, o && o.callStop].reduce((latest, value) =>
+            Number.isFinite(value) && value >= 0 && value <= observed ? Math.max(latest, value) : latest, time);
         }, 0);
         if (stopped) {
           meta.time = Math.max(meta.time || 0, stopped);
@@ -229,7 +238,7 @@ number.check = async (filterTabsFrom, ops = {}, reason) => {
       // is the tab using too much memory, discard instantly
       if (prefs['memory-enabled'] && meta.memory && meta.memory > prefs['memory-value'] * 1024 * 1024) {
         log('forced discarding', 'memory usage');
-        discard(tb);
+        jobs.push(discard(tb, {automatic: true}));
         memDiscards += 1;
         continue;
       }
@@ -325,8 +334,9 @@ number.check = async (filterTabsFrom, ops = {}, reason) => {
 
   log('number check', 'discarding', tbds.length);
   for (const tb of tbds) {
-    discard(tb);
+    jobs.push(discard(tb, {automatic: true}));
   }
+  await Promise.all(jobs);
 };
 
 chrome.alarms.onAlarm.addListener(alarm => {
@@ -388,19 +398,20 @@ chrome.idle.onStateChanged.addListener(state => {
 }
 
 /* inject to existing tabs */
-starters.push(() => chrome.app && query({
+starters.push(() => query({
   url: '*://*/*',
   discarded: false
-}).then(tbs => {
-  const contentScripts = chrome.app.getDetails().content_scripts;
+}).then(async tbs => {
+  const contentScripts = chrome.runtime.getManifest().content_scripts;
   for (const tab of tbs) {
     for (const cs of contentScripts) {
-      chrome.scripting.executeScript({
+      await chrome.scripting.executeScript({
         target: {
           tabId: tab.id,
           allFrames: cs.all_frames
         },
-        files: cs.js
+        files: cs.js,
+        world: cs.world || 'ISOLATED'
       }).catch(() => {});
     }
   }

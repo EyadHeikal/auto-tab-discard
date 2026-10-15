@@ -25,7 +25,7 @@
       ]
     },
     "audio": {
-      "title": "true => do not discard if audio is playing",
+      "title": "true => do not discard if audio is playing or a call or capture is active",
       "type": "boolean"
     },
     "paused": {
