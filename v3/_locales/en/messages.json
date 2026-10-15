@@ -72,7 +72,7 @@
     "message": "Discarding conditions"
   },
   "options_audio": {
-    "message": "Do not discard a tab when media is playing"
+    "message": "Do not discard a tab when media is playing or a call or capture is active"
   },
   "options_paused": {
     "message": "Do not discard a tab when there is a paused media player"

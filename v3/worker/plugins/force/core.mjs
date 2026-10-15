@@ -37,7 +37,7 @@ const observe = () => {
           // url is not parseable; treat as a non-whitelisted tab
         }
         return true;
-      }).forEach(discard));
+      }).forEach(tab => discard(tab, {automatic: true})));
     }
     else {
       log('Please disable forced plug-in', 'there is not hostname in the list');

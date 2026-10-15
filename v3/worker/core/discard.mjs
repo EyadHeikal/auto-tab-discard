@@ -1,11 +1,20 @@
 import {prefs, storage} from './prefs.mjs';
 import {log} from './utils.mjs';
 import {overlay} from './favicon.mjs';
+import {protection} from './calls.mjs';
 
 // this list keeps ids of the tabs that are in progress of being discarded
 const inprogress = new Set();
 
-const discard = tab => {
+const guarded = async (tab, options) => {
+  if (options.automatic !== true) {
+    return false;
+  }
+  const prefs = await storage({audio: true});
+  return protection(tab, prefs.audio);
+};
+
+const discard = async (tab, options = {}) => {
   if (inprogress.has(tab.id)) {
     return;
   }
@@ -22,29 +31,33 @@ const discard = tab => {
     log('already discarded', tab);
     return;
   }
+  if (await guarded(tab, options)) {
+    inprogress.delete(tab.id);
+    return false;
+  }
   return storage(prefs).then(prefs => {
     if (discard.count > prefs['simultaneous-jobs'] && discard.time + 5000 < Date.now()) {
       discard.count = 0;
     }
     if (discard.count > prefs['simultaneous-jobs']) {
       log('discarding queue for', tab.id, tab.url);
-      discard.tabs.push(tab);
+      discard.tabs.push({tab, options});
       return;
     }
 
     return new Promise(resolve => {
       discard.count += 1;
       discard.time = Date.now();
-      const next = () => {
-        discard.perform(tab);
+      const next = async () => {
+        const discarded = await discard.perform(tab, options);
 
         discard.count -= 1;
         if (discard.tabs.length) {
-          const tab = discard.tabs.shift();
-          inprogress.delete(tab.id);
-          discard(tab);
+          const job = discard.tabs.shift();
+          inprogress.delete(job.tab.id);
+          discard(job.tab, job.options);
         }
-        resolve();
+        resolve(discarded);
       };
       // prepend a symbol to the tab title (e.g. 💤), so that discarded tabs can
       // be recognized at a glance. This step is kept separate from the favicon:
@@ -116,10 +129,14 @@ const discard = tab => {
 };
 discard.tabs = [];
 discard.count = 0;
-discard.perform = tab => {
+discard.perform = async (tab, options = {}) => {
   try {
+    if (await guarded(tab, options)) {
+      return false;
+    }
     log('discarding', tab.id, tab.title, tab.url);
-    chrome.tabs.discard(tab.id).catch(e => {});
+    await chrome.tabs.discard(tab.id);
+    return true;
   }
   catch (e) {
     log('discarding failed', e);

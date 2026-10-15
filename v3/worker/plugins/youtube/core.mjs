@@ -5,9 +5,9 @@ const perform = discard.perform;
 
 function enable() {
   log('installing youtube/core.js');
-  discard.perform = tab => {
+  discard.perform = (tab, options = {}) => {
     if (tab.url && tab.url.startsWith('https://www.youtube.com/')) {
-      chrome.scripting.executeScript({
+      return chrome.scripting.executeScript({
         target: {
           tabId: tab.id
         },
@@ -25,10 +25,10 @@ function enable() {
         }
       }).catch(e => {
         console.error('plugins/youtube -> error', e);
-      }).then(() => perform(tab));
+      }).then(() => perform(tab, options));
     }
     else {
-      perform(tab);
+      return perform(tab, options);
     }
   };
 }

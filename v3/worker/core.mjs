@@ -25,7 +25,7 @@ chrome.runtime.onMessageExternal.addListener((request, sender, resposne) => {
         tbs = tbs.filter(({url = '', discarded, active}) => (url.startsWith('http') ||
           url.startsWith('ftp')) && !discarded && !active);
       }
-      tbs.forEach(discard);
+      tbs.forEach(tab => discard(tab, {automatic: request.forced !== true}));
 
       resposne(tbs.map(t => t.id));
     });
@@ -37,7 +37,7 @@ chrome.runtime.onMessage.addListener((request, sender, resposne) => {
   log('onMessage request received', request);
   const {method} = request;
   if (method === 'discard.on.load') { // for links after initial load
-    discard(sender.tab);
+    discard(sender.tab, {automatic: true});
   }
   else if (method === 'storage') {
     Promise.all([

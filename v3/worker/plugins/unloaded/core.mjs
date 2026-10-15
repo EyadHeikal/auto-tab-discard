@@ -11,7 +11,7 @@ function enable() {
   }
 
   query({status: 'unloaded'}).then(tbs => {
-    tbs.forEach(tb => discard(tb));
+    tbs.forEach(tb => discard(tb, {automatic: true}));
   });
 }
 function disable() {
