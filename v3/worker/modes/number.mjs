@@ -222,6 +222,13 @@ number.check = async (filterTabsFrom, ops = {}, reason) => {
         exceptionCount += 1;
         continue;
       }
+      // Zen split views set no splitViewId, but their pages stay visible beside the focused tab
+      if (prefs['split-view'] && meta.visible === true) {
+        log('discarding aborted', 'tab is visible in a split view', tb.id, tb.url);
+        icon.disabled(tb, 'tab is part of a focused split view');
+        exceptionCount += 1;
+        continue;
+      }
 
       if (prefs.audio && prefs.period > 0) {
         // Media may stop while the asynchronous metadata scan is in progress.

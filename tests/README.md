@@ -17,6 +17,7 @@ The tests execute the real v3 content scripts and worker modules with controlled
 - Enabled YouTube plugin integration on meeting and video pages, including final protection checks and discard completion promises.
 - Unavailable or malformed per-frame call metadata, while preserving explicit manual and unloaded-page discards.
 - Existing media-stop, paused-player, unsaved-form, age ordering, and preference behavior.
+- Split view pages that Zen shows beside the focused tab without a `splitViewId`, native split views, and the option that turns this protection off.
 
 `MediaStreamTrack.stop()` and `RTCPeerConnection.close()` deliberately emit no events in the fixtures; the tests require state refresh to detect them. The fixtures do not emulate native Firefox picture-in-picture, browser extension execution worlds, or a real Meet/Discord call. Those paths require browser verification after the extension and meeting pages are reloaded.
 

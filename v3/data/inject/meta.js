@@ -26,6 +26,7 @@
     paused,
     'permission': typeof Notification !== 'undefined' ? Notification.permission === 'granted' : false,
     'ready': document.readyState === 'complete' || document.readyState === 'loaded',
+    'visible': document.visibilityState === 'visible',
     'memory': performance && performance.memory ? performance.memory.totalJSHeapSize : false,
     'forms': window.isReceivingFormInput || false
   } : {
