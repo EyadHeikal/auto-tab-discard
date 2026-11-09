@@ -22,6 +22,21 @@ In Chrome, disable the store-installed copy, then use **Load unpacked** in `chro
 
 For Firefox, use **Load Temporary Add-on** in `about:debugging#/runtime/this-firefox` and select the generated unsigned XPI. Temporary installation lasts until Firefox restarts. Permanent installation in standard Firefox requires Mozilla signing; this build does not sign or submit the add-on. Reload call pages before joining a meeting.
 
+#### Zen: persistent local installation
+
+Zen allows unsigned extensions to be installed permanently after changing a profile preference:
+
+1. Run `python3 build.py` and find the generated `*-firefox-unsigned.xpi` under the new `dist/` directory.
+2. In Zen's `about:config`, set `xpinstall.signatures.required` to `false`. This disables Mozilla signature enforcement for extensions throughout that Zen profile.
+3. Open `about:addons` and enable any existing Auto Tab Discard copy first. Then click the gear menu, choose **Install Add-on From File**, and select that XPI. Use this installation method instead of **Load Temporary Add-on**.
+4. Open Auto Tab Discard's details, ensure it is enabled, and set **Allow automatic updates** to **Off** so a store update cannot replace your modified build.
+
+Installing the same version over a disabled copy only enables the old package. If that happened, install the XPI again while the add-on is enabled.
+
+The package keeps the original extension ID. Install over the existing copy without uninstalling it first to retain its settings. Reload call pages before joining a meeting, then restart Zen to check that the extension stays enabled.
+
+Zen installs a copy of the package, so later source edits require running `python3 build.py` again and installing the new XPI through the same menu. See [Zen's unsigned-extension support](https://github.com/zen-browser/desktop/commit/10cd70e858e03c5de54efa5343cb984ce3af450c) and [Mozilla's installation instructions](https://extensionworkshop.com/documentation/develop/test-permission-requests/).
+
 ### Preview
 
 [![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/S0rHU38OnTE/0.jpg)](https://www.youtube.com/watch?v=S0rHU38OnTE)
